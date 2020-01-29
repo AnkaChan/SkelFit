@@ -7,14 +7,60 @@ import os
 import subprocess
 import matplotlib.pyplot as plt
 from pathlib import Path
+import math
+from os.path import join
+import itertools
+
+def removeOutliers(inChunkFile, newChunkFile, outlierIds):
+    data = json.load(open(inChunkFile))
+    pts = np.array(data['Pts'])
+    pts[:, outlierIds, :] = [0,0,-1]
+
+    data['Pts'] = pts.tolist()
+
+    json.dump(data, open(newChunkFile, 'w'), indent=2)
+    return newChunkFile
+
+def toPolyData(verts, faces):
+    nFaces = np.array([len(vs) for vs in faces])
+    faces = np.hstack([nFaces.reshape(nFaces.shape[0],1), faces])
+
+    mesh = pv.PolyData(verts, faces)
+    return mesh
+
+
+def readBatchedSkelParams(inBatchFile, numRotations=16):
+    files = json.load(open(inBatchFile))['BatchFiles']
+
+    quaternions = []
+    translations = []
+    for pf in files:
+        r,t = readSkelParams(pf)
+        quaternions.append(r)
+        translations.append(t)
+
+    return quaternions, translations, files
+
+def readSkelParams(inFile, numRotations=16):
+    fpPose = open(inFile)
+
+    paramsRaw = fpPose.read().split('\n')
+    r = np.fromstring('\n'.join(paramsRaw[:numRotations]), sep=' ').reshape(numRotations, -1)
+    t = np.fromstring(paramsRaw[numRotations], sep=' ')
+    return r, t
+
+def getFrameName(fileName):
+    return Path(fileName).stem
 
 def makeBatchFile(files, batchFile):
     json.dump({"BatchFiles": files}, open(batchFile, 'w'), indent=2)
 
-def makeBatchFileFromFolder(folder, ext, batchFile, sort=True):
+def makeBatchFileFromFolder(folder, ext, batchFile, sort=True, range=None, step=1):
     files = glob.glob(folder + r'\*.' + ext)
     if sort:
         files.sort()
+    if range is not None:
+        files = files[range[0]:range[1]:step]
     makeBatchFile(files, batchFile)
 
 
@@ -24,6 +70,51 @@ def toFrameData(infile, outJasonFile):
         'Pts': capture.tolist()
     }
     json.dump(frameData, open(outJasonFile, 'w'), indent=2)
+
+
+def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='obj', processJsonInterval = []):
+    os.makedirs(jsonFrameDataFolder, exist_ok=True)
+
+    cloudFiles = glob.glob(inFrameDataFolder + r'\*.' + extName)
+    
+    outFile = 'BatchFile.json'
+
+    if processJsonInterval is not None:
+        if len(processJsonInterval) == 2:
+            cloudFiles = cloudFiles[processJsonInterval[0]: processJsonInterval[1]]
+            outFile = 'BatchFile' + str(processJsonInterval[0]) + "_" + str(processJsonInterval[1]) + '.json'
+
+    jsonFiles = []
+    for f in tqdm.tqdm(cloudFiles):
+        pf = Path(f)
+        jFileName = jsonFrameDataFolder + r'\\' + pf.stem + '.json'
+        toFrameData(f, jFileName)
+        jsonFiles.append(jFileName)
+
+    s = glob.glob(jsonFrameDataFolder + r'\*.json')
+
+
+    outFile = join(jsonFrameDataFolder, outFile)
+    json.dump({"BatchFiles" : jsonFiles}, open(outFile, 'w'), indent=2)
+
+    return outFile
+
+
+def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, inputExt = 'obj'):
+    inFiles = glob.glob(join(inFolder, '*.'+inputExt))
+    if interval is not None:
+        inFiles = inFiles[interval[0]:interval[1]]
+
+    allPts = []
+    for pf in tqdm.tqdm(inFiles):
+        pc = pv.PolyData(pf)
+        allPts.append(pc.points.tolist())
+
+    if interval is not None:
+        filename, file_extension = os.path.splitext(chunkFile)
+        chunkFile = filename + '_' + str(interval[0]) + '_' + str(interval[1]) + file_extension
+
+    json.dump({"BatchFiles": inFiles, "Pts": allPts}, open(chunkFile, 'w'), indent=indent)
 
 def scanFilesToChunkFromBatchFile(batchFile, chunkFile, interval =[], indent=2):
     files = json.load(open(batchFile))["BatchFiles"]
@@ -150,8 +241,8 @@ def unpackChunkData(chunkFile, outFolder, interval=[], outBatchFileName = "Batch
     json.dump({"BatchFiles":outJsonFiles}, open(batchFileName, 'w'), indent=indent)
 
 
-def SampleDataSatistics(sampleData):
-    sampleMaskes = np.zeros((sampleData.shape[0], 1487))
+def SampleDataSatistics(sampleData, numPts = 1487):
+    sampleMaskes = np.zeros((sampleData.shape[0], numPts))
     sampleMaskes[:, :] = sampleData[:, :, 2] > 0
     appearenceTimes = np.sum(sampleMaskes, axis=0)
     return appearenceTimes
@@ -168,8 +259,7 @@ def filterOutliers(inBatchFile, cacheFolder, filteringThreshold,
         fittingFolder = iterationOutFolder + '\\' + 'Fitting'
         os.makedirs(fittingFolder, exist_ok=True)
 
-        cmd = [exePath, inBatchFile, fittingFolder, '-s', modelInput, '-r', str(threshold), '--outputSkipStep', '100',
-               '--outputFittedModels', '0']
+        cmd = [exePath, inBatchFile, fittingFolder, '-s', modelInput, '-r', str(threshold), '--outputSkipStep', '100']
         if chunkInput:
             cmd.append('-c')
         if chunkOutput:
@@ -211,3 +301,114 @@ def filterOutliers(inBatchFile, cacheFolder, filteringThreshold,
             plt.show()
 
     return inBatchFile
+
+def QuaternionToAngleAxis(quaternion):
+  angle_axis = np.zeros((3))
+
+  q1 = quaternion[1];
+  q2 = quaternion[2];
+  q3 = quaternion[3];
+  sin_squared_theta = q1 * q1 + q2 * q2 + q3 * q3
+
+  # For quaternions representing non-zero rotation, the conversion
+  # is numerically stable.
+  if (sin_squared_theta > 0.0):
+    sin_theta = sin_squared_theta
+    cos_theta = quaternion[0]
+
+    if (cos_theta < 0.0):
+      two_theta = 2.0 * math.atan2(-sin_theta, -cos_theta)
+    else:
+      two_theta = 2.0 * math.atan2(sin_theta, cos_theta)
+
+    k = two_theta / sin_theta
+    angle_axis[0] = q1 * k
+    angle_axis[1] = q2 * k
+    angle_axis[2] = q3 * k
+  else:
+    k = 2.0
+    angle_axis[0] = q1 * k
+    angle_axis[1] = q2 * k
+    angle_axis[2] = q3 * k
+  return angle_axis
+
+def loadPoseChunkFile(poseChunkFile):
+    poseData = json.load(open(poseChunkFile))
+    quaternions = [p['JointAngles'] for p in poseData]
+    translations = [p['Translation'] for p in poseData]
+
+    return quaternions, translations
+
+def captureStatistics(inFolder, outFolder=None, extName='obj'):
+
+    pointcloudFiles = glob.glob(join(inFolder, '*.'+extName))
+
+    observations = []
+    obsMaskEachFrame = []
+    numObservedPts = []
+    for pcF in tqdm.tqdm(pointcloudFiles):
+        pc = pv.PolyData(pcF)
+        observations.append(pc.points)
+
+        obsMask = pc.points[:, 2] != -1
+        obsMaskEachFrame.append(obsMask)
+        numObservedPts.append(np.where(obsMask)[0].shape[0])
+
+    observations = np.array(observations)
+    obsMaskEachFrame = np.array(obsMaskEachFrame)
+    numObservedPts = np.array(numObservedPts)
+
+    if outFolder is not None:
+        os.makedirs(outFolder, exist_ok=True)
+
+        outObsFile = join(outFolder, 'All.npy')
+        outObsMaskEachFrameFile = join(outFolder, 'ObsMaskEachFrame.npy')
+        outNumObservedPtsFile = join(outFolder, 'NumObservedPts.npy')
+
+        np.save(outObsFile,  observations)
+        np.save(outObsMaskEachFrameFile,  obsMaskEachFrame)
+        np.save(outNumObservedPtsFile,  numObservedPts)
+
+    return observations, obsMaskEachFrame, numObservedPts, pointcloudFiles
+
+def searchQuadIds(qCode, codeSet):
+    qvIds = [-1, -1, -1, -1]
+
+    for iV, cCode in enumerate(codeSet):
+        ids = [i for i, x in enumerate(cCode['Code']) if x == qCode]
+        if len(ids) != 0:
+            assert  len(ids) == 1
+            qvIds[cCode['Id'][ids[0]]] = iV
+
+    return qvIds
+
+def generateQuadStructure(pts, codeSet,characterDictionary=['1', '2', '3', '4', '5', '6', '7', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'J', 'K', 'L',
+                           'M', 'P', 'Q', 'R', 'T', 'U', 'V', 'Y']):
+    quadsCodes=[]
+    quads = []
+    ptsUsedMask = np.zeros(pts.shape[0])
+
+    for c1, c2 in itertools.product(characterDictionary, characterDictionary):
+        quadsCodes.append(c1 + c2)
+    for qc in quadsCodes:
+        # print(qc)
+        qvIds = searchQuadIds(qc, codeSet)
+
+        if -1 not in qvIds:
+            if np.all(pts[qvIds, 2] != -1):
+                quads.append(qvIds)
+                # print(qvIds)
+                ptsUsedMask[qvIds] = 1
+
+    return quads, ptsUsedMask
+
+def readCIdFile(cIdFile):
+    CIDList = open(cIdFile).read()
+    cornerCodes = CIDList.split('\n')
+    codeSet = []
+    for i in range(len(cornerCodes)):
+        if len(cornerCodes[i]) >= 3:
+            code2 = cornerCodes[i].split(' ')
+            codeSet.append({'Code': [c[:2] for c in code2], 'Id': [int(c[2:]) for c in code2]})
+
+    return codeSet

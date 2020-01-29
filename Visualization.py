@@ -7,12 +7,45 @@ import os
 import pyvista as pv
 import vtk
 import tqdm
+import json
 
-def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False, visualizeFittingError = False,
-                 meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
-    outVTKFolder = inFitFolder + r'\vtk'
+def jsonToVtk(batchFile, outVTKFolder, addFaces = False, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
+    jsonFiles = json.load(open(batchFile))["BatchFiles"]
     os.makedirs(outVTKFolder, exist_ok=True)
-    meshWithFaces = pv.read(meshWithFaces)
+
+    if addFaces:
+        meshWithFaces = pv.PolyData(meshWithFaces)
+
+    for jF in tqdm.tqdm(jsonFiles):
+        fp = Path(jF)
+        pts = json.load(open(jF))["Pts"]
+        mesh = pv.PolyData()
+
+        mesh.points = np.array(pts)
+
+        if addFaces:
+            faceIdToPreserve = []
+            faces = meshWithFaces.faces.reshape(-1, 4)
+            for i in range(faces.shape[0]):
+                if pts[faces[i][1]][2] != -1 and pts[faces[i][2]][2] != -1 and pts[faces[i][3]][2] != -1:
+                    faceIdToPreserve.append(i)
+            faces = faces[faceIdToPreserve, :]
+            nFaces = faces.shape[0]
+            mesh.faces = faces.flatten()
+
+        mesh.save(outVTKFolder + r'\\' + fp.stem + '.vtk')
+
+
+def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False, visualizeFittingError = False, outVTKFolder = None, extName= 'obj', addABeforeName = False, outExtName='vtk',
+                 meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply', addGround =False, groundLevel=0):
+
+    if outVTKFolder is None:
+        outVTKFolder= inFitFolder + r'\vtk'
+    os.makedirs(outVTKFolder, exist_ok=True)
+    if meshWithFaces is not None:
+        meshWithFaces = pv.read(meshWithFaces)
+    else:
+        meshWithFaces = None
 
     if observeHistograms is not None:
         if removeUnobserved:
@@ -27,9 +60,10 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
             # meshWithFaces.n_faces = nFaces
             meshWithFaces.faces = faces.flatten()
 
-    objFiles = glob.glob(inFitFolder + r'\*.obj')
+
+    objFiles = glob.glob(inFitFolder + r'\*.' + extName)
     errFolder = inFitFolder + r'\Errs'
-    for objF in tqdm.tqdm(objFiles):
+    for objF in tqdm.tqdm(objFiles, desc='Fitting to vtk'):
         fp = Path(objF)
 
         mesh = pv.read(objF)
@@ -38,8 +72,52 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
         if visualizeFittingError:
             errs = np.loadtxt(errFolder + '\\' + fp.stem + '.txt')
             mesh.point_arrays['Errs'] = errs
+        if observeHistograms is not None:
+            mesh.point_arrays['NumPts'] = observeHistograms
 
-        mesh.save(outVTKFolder + r'\\' + fp.stem + '.vtk')
+        if addGround:
+            nPts = mesh.points.shape[0]
+            groundPts =  np.array([[3000, 3000, 0], [-3000, 3000, 0], [-3000, -3000, 0], [3000, -3000, 0]])
+            points = np.vstack([mesh.points, groundPts])
+            faces = np.hstack([mesh.faces, [4, nPts, nPts + 1, nPts + 2, nPts + 3]])
+
+            mesh = pv.PolyData(points, faces)
+
+        if addABeforeName:
+            mesh.save(outVTKFolder + r'\\A' + fp.stem + '.' + outExtName)
+        else:
+            mesh.save(outVTKFolder + r'\\' + fp.stem + '.' + outExtName)
+
+def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterval=[], addFaces = False, addABeforeName=True, faceMesh=None):
+
+
+    # addFaces = True
+    if outVtkFolder is None:
+        outVtkFolder = inObjFolder + r'\vtk'
+        
+    objFiles = glob.glob(inObjFolder + r'\*.' + inFileExt)
+    
+    if faceMesh is not None:
+        meshWithFaces = pv.read(faceMeshFile)
+    else:
+        meshWithFaces = pv.PolyData()
+        
+    os.makedirs(outVtkFolder, exist_ok=True)
+    if len(processInterval) == 2:
+        objFiles = objFiles[processInterval[0]: processInterval[1]]
+    for f in tqdm.tqdm(objFiles, desc=inFileExt + " to vtk"):
+        fp = Path(f)
+
+        mesh = pv.read(f)
+        if addFaces:
+            mesh.faces = meshWithFaces.faces
+        else:
+            mesh.faces = np.empty((0,), dtype=np.int32)
+        if addABeforeName:
+            outName = outVtkFolder + r'\\A' + fp.stem + '.vtk'
+        else:
+            outName = outVtkFolder + r'\\' + fp.stem + '.vtk'
+        mesh.save(outName)
 
 def obj2vtk(objF, vtkF, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
     meshWithFaces = pv.read(meshWithFaces)
@@ -56,9 +134,15 @@ def highlightTarget(vtkF, vtkFHighlighted, highlightIds):
 
 
 def writeCorrs(scanFile, fitFile, outCorrFile, outTargetFile):
-    scanData = pv.PolyData()
-    jData = json.load(open(scanFile))
-    scanData.points = np.array(jData["Pts"])
+
+    meshFilename, meshFileExtension = os.path.splitext(scanFile)
+
+    if meshFileExtension == '.json':
+        scanData = pv.PolyData()
+        jData = json.load(open(scanFile))
+        scanData.points = np.array(jData["Pts"])
+    else:
+        scanData = pv.PolyData(scanFile)
 
     fittingData = pv.PolyData(fitFile)
     goodPts = np.array(scanData.points[:,2]>0)
@@ -94,8 +178,8 @@ def writeCorrs(scanFile, fitFile, outCorrFile, outTargetFile):
     if outTargetFile != '':
         scanData.save(outTargetFile)
 
-def visualizeCorrs(targetFiles, fittingDataFolder, outputFolder, sanityCheck=True):
-    objFiles = glob.glob(fittingDataFolder + r'\*.obj')
+def visualizeCorrs(targetFiles, fittingDataFolder, outputFolder, sanityCheck=True, fitFileExt = 'obj'):
+    objFiles = glob.glob(fittingDataFolder + r'\*.' + fitFileExt)
     objFiles.sort()
     os.makedirs(outputFolder, exist_ok=True)
     if sanityCheck:
@@ -139,7 +223,7 @@ def VisualizeBones(inSkelJsonFile, outSkelVTK):
     writer.Update()
 
 def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, observeHistograms = None, removeUnobserved = False,
-        visualizeFittingError = False, fittingErrorFolder = '', visualizeBoneActivation = False, chunked = False,
+        visualizeFittingError = False, fittingErrorFolder = '', visualizeBoneActivation = False, chunked = False, addLogScaleWeights = False,
         meshWithFaces = r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
     meshWithFaces = pv.read(meshWithFaces)
 
@@ -151,10 +235,14 @@ def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, o
 
     if visualizeWeights:
         weights = np.array(jData["Weights"])
+
+
         numJoints = weights.shape[0]
 
         for i in range(numJoints):
             mesh.point_arrays['Weight_%02i' % i] = weights[i, :]
+            if addLogScaleWeights:
+                mesh.point_arrays['Weights_Log_%02i' % i] = np.log(np.abs(10e-16 + weights[i, :]))
 
     if observeHistograms is not None:
         mesh.point_arrays["TimesObserved"] = observeHistograms
@@ -197,3 +285,11 @@ def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, o
     mesh.faces = meshWithFaces.faces
     # mesh.n_faces = meshWithFaces.n_faces
     mesh.save(outSkelVTK)
+
+if __name__ == '__main__':
+    deformedCompleteMeshFolder = r'F:\WorkingCopy2\2020_01_13_FinalAnimations\Katey_NewJointTLap\LongSequence\SLap_SBiLap_True_TLap_50_JTW_100000_JBiLap_0_Step200_Overlap100\Deformed'
+    finalVisFolder = r'F:\WorkingCopy2\2020_01_13_FinalAnimations\Katey_NewJointTLap\LongSequence\SLap_SBiLap_True_TLap_50_JTW_100000_JBiLap_0_Step200_Overlap100\Vis\Final'
+    inOriginalRestPoseQuadMesh = r'Z:\2020_01_16_KM_Edited_Meshes\KateyCalibrated_edited2.obj'
+
+    fittingToVtk(deformedCompleteMeshFolder, outVTKFolder=finalVisFolder, visualizeFittingError=False, addABeforeName=True, addGround=True,
+                 meshWithFaces=inOriginalRestPoseQuadMesh)

@@ -8,6 +8,7 @@ import pyvista as pv
 import vtk
 import tqdm
 import json
+from .SkeletonModel import  *
 
 def jsonToVtk(batchFile, outVTKFolder, addFaces = False, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
     jsonFiles = json.load(open(batchFile))["BatchFiles"]
@@ -111,8 +112,8 @@ def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterv
         mesh = pv.read(f)
         if addFaces:
             mesh.faces = meshWithFaces.faces
-        else:
-            mesh.faces = np.empty((0,), dtype=np.int32)
+        # else:
+        #     mesh.faces = np.empty((0,), dtype=np.int32)
         if addABeforeName:
             outName = outVtkFolder + r'\\A' + fp.stem + '.vtk'
         else:
@@ -120,9 +121,10 @@ def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterv
         mesh.save(outName)
 
 def obj2vtk(objF, vtkF, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
-    meshWithFaces = pv.read(meshWithFaces)
     mesh = pv.read(objF)
-    mesh.faces = meshWithFaces.faces
+    if meshWithFaces is not None:
+        meshWithFaces = pv.read(meshWithFaces)
+        mesh.faces = meshWithFaces.faces
     mesh.save(vtkF)
 
 def highlightTarget(vtkF, vtkFHighlighted, highlightIds):
@@ -132,6 +134,35 @@ def highlightTarget(vtkF, vtkFHighlighted, highlightIds):
     target['Highlight'] = highlightMask
     target.save(vtkFHighlighted)
 
+def drawCorrs(pts1, pts2, outCorrFile):
+    ptsVtk = vtk.vtkPoints()
+    ptsAll = np.vstack([pts1, pts2])
+    numPts = pts1.shape[0]
+
+    assert pts1.shape[0] == pts2.shape[0]
+
+    # pts.InsertNextPoint(p1)
+    for i in range(ptsAll.shape[0]):
+        ptsVtk.InsertNextPoint(ptsAll[i, :].tolist())
+
+    polyData = vtk.vtkPolyData()
+    polyData.SetPoints(ptsVtk)
+
+    lines = vtk.vtkCellArray()
+
+    for i in range(pts1.shape[0]):
+        line = vtk.vtkLine()
+        line.GetPointIds().SetId(0, i)  # the second 0 is the index of the Origin in the vtkPoints
+        line.GetPointIds().SetId(1, i + numPts)  # the second 1 is the index of P0 in the vtkPoints
+        # line.
+        lines.InsertNextCell(line)
+
+    polyData.SetLines(lines)
+
+    writer = vtk.vtkPolyDataWriter()
+    writer.SetInputData(polyData)
+    writer.SetFileName(outCorrFile)
+    writer.Update()
 
 def writeCorrs(scanFile, fitFile, outCorrFile, outTargetFile):
 
@@ -285,6 +316,69 @@ def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, o
     mesh.faces = meshWithFaces.faces
     # mesh.n_faces = meshWithFaces.n_faces
     mesh.save(outSkelVTK)
+
+
+def drawBones(bones, outFile):
+    ptsVtk = vtk.vtkPoints()
+    ptsAll = np.vstack(bones)
+    # pts.InsertNextPoint(p1)
+    for i in range(ptsAll.shape[0]):
+        ptsVtk.InsertNextPoint(ptsAll[i, :].tolist())
+
+    polyData = vtk.vtkPolyData()
+    polyData.SetPoints(ptsVtk)
+
+    lines = vtk.vtkCellArray()
+
+    for i in range(int(ptsAll.shape[0]/2)):
+        line = vtk.vtkLine()
+        line.GetPointIds().SetId(0, i * 2)  # the second 0 is the index of the Origin in the vtkPoints
+        line.GetPointIds().SetId(1, i * 2 +1)  # the second 1 is the index of P0 in the vtkPoints
+        # line.
+        lines.InsertNextCell(line)
+
+    polyData.SetLines(lines)
+
+    writer = vtk.vtkPolyDataWriter()
+    writer.SetInputData(polyData)
+    writer.SetFileName(outFile)
+    writer.Update()
+
+def visualizeSkeleton(paramChunkFile, skelDataFile, outFolder):
+    os.makedirs(outFolder, exist_ok =True)
+    vRestpose, J, weights, poseBlendShape, kintreeTable, parent, faces = readSkeletonData(skelDataFile)
+    params = json.load(open(paramChunkFile))
+
+    bones = [(bone[1], bone[0]) for bone in parent.items()]
+    bonesInitialData = [np.array([J[bone[0], :], J[bone[1], :]]) for bone in bones]
+
+    drawBones(bonesInitialData, join(outFolder, 'BonesInitialPoses.vtk'))
+
+    for ip, param in enumerate(params):
+        jointAngles = param['JointAngles']
+        translations = param['Translation']
+        RMats = quaternionsToRotations(jointAngles)
+        translations = np.array(translations)
+
+        v, G = deformVertsWithJointTranslation(vRestpose, RMats, translations, J, weights, kintreeTable, parent, returnTransf=True)
+
+        print(G)
+
+        mesh = Data.toPolyData(v, faces)
+        outDeformedFile = join(outFolder, 'A' + str(ip).zfill(5) + '.ply')
+        mesh.save(outDeformedFile)
+
+        boneDataDeformed = []
+        for bone, boneData in zip(bones, bonesInitialData):
+            T = G[bone[0], :, :]
+            newBoneData = np.hstack([T @ np.vstack([boneData[0,:].reshape(3,1) , [1]]), T @ np.vstack([boneData[1,:].reshape(3,1), [1]])])
+            newBoneData = newBoneData[:3, :].transpose()
+            newBoneData[0, :] += translations[0,:]
+            newBoneData[1, :] += translations[0,:]
+
+            boneDataDeformed.append(newBoneData)
+
+        drawBones(boneDataDeformed, join(outFolder, 'Bones' +str(ip).zfill(5)+ '.vtk'))
 
 if __name__ == '__main__':
     deformedCompleteMeshFolder = r'F:\WorkingCopy2\2020_01_13_FinalAnimations\Katey_NewJointTLap\LongSequence\SLap_SBiLap_True_TLap_50_JTW_100000_JBiLap_0_Step200_Overlap100\Deformed'

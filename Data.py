@@ -41,6 +41,21 @@ def readBatchedSkelParams(inBatchFile, numRotations=16):
 
     return quaternions, translations, files
 
+def readSkelParamFile(inPoseFile):
+    skelParam = json.load(open(inPoseFile, 'w'))
+
+    jAngles = skelParam["JointAngles"]
+    translations =  skelParam["Translation"]
+
+    return jAngles, translations
+
+def readChunkedSkelParams(inBatchFile):
+    paramJ = json.load(open(inBatchFile))
+    jointAngles =  [p['JointAngles'] for p in paramJ['Params']]
+    translations = [p['Translation'] for p in paramJ['Params']]
+    files = paramJ['BatchFiles']
+    return jointAngles, translations, files
+
 def readSkelParams(inFile, numRotations=16):
     fpPose = open(inFile)
 
@@ -61,6 +76,9 @@ def makeBatchFileFromFolder(folder, ext, batchFile, sort=True, range=None, step=
         files.sort()
     if range is not None:
         files = files[range[0]:range[1]:step]
+    elif step !=1:
+        files = files[::step]
+        
     makeBatchFile(files, batchFile)
 
 
@@ -412,3 +430,14 @@ def readCIdFile(cIdFile):
             codeSet.append({'Code': [c[:2] for c in code2], 'Id': [int(c[2:]) for c in code2]})
 
     return codeSet
+
+def write_obj(file_name, verts, faces=None):
+    with open(file_name, 'w') as fp:
+        for v in verts:
+            fp.write('v %f %f %f\n' % (v[0], v[1], v[2]))
+        if faces is not None:
+            for f in faces:
+                fp.write('f ')
+                for vId in f:
+                    fp.write('%d ' % (vId + 1))
+                fp.write('\n')

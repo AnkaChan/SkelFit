@@ -11,6 +11,12 @@ import math
 from os.path import join
 import itertools
 
+def getBadRestposeVerts(skelDataFile):
+    skelData = json.load(open(skelDataFile))
+    coarseMeshPts = np.array(skelData['VTemplate'])
+    badVertsOnRestpose = np.where(coarseMeshPts[2, :] == -1)[0]
+    return badVertsOnRestpose
+
 def removeOutliers(inChunkFile, newChunkFile, outlierIds):
     data = json.load(open(inChunkFile))
     pts = np.array(data['Pts'])
@@ -82,15 +88,18 @@ def makeBatchFileFromFolder(folder, ext, batchFile, sort=True, range=None, step=
     makeBatchFile(files, batchFile)
 
 
-def toFrameData(infile, outJasonFile):
+def toFrameData(infile, outJasonFile, discardedVerts=None):
     capture = pv.read(infile).points
+    if discardedVerts is not None:
+        capture[discardedVerts, :] = [0,0,-1]
     frameData = {
         'Pts': capture.tolist()
     }
+
     json.dump(frameData, open(outJasonFile, 'w'), indent=2)
 
 
-def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='obj', processJsonInterval = []):
+def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='obj', processJsonInterval = [], discardedVerts=None):
     os.makedirs(jsonFrameDataFolder, exist_ok=True)
 
     cloudFiles = glob.glob(inFrameDataFolder + r'\*.' + extName)
@@ -106,11 +115,10 @@ def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='
     for f in tqdm.tqdm(cloudFiles):
         pf = Path(f)
         jFileName = jsonFrameDataFolder + r'\\' + pf.stem + '.json'
-        toFrameData(f, jFileName)
+        toFrameData(f, jFileName, discardedVerts)
         jsonFiles.append(jFileName)
 
     s = glob.glob(jsonFrameDataFolder + r'\*.json')
-
 
     outFile = join(jsonFrameDataFolder, outFile)
     json.dump({"BatchFiles" : jsonFiles}, open(outFile, 'w'), indent=2)
@@ -118,7 +126,7 @@ def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='
     return outFile
 
 
-def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, inputExt = 'obj'):
+def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, inputExt = 'obj', discardedVerts=None, convertToMM=False):
     inFiles = glob.glob(join(inFolder, '*.'+inputExt))
     if interval is not None:
         inFiles = inFiles[interval[0]:interval[1]]
@@ -126,6 +134,10 @@ def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, input
     allPts = []
     for pf in tqdm.tqdm(inFiles):
         pc = pv.PolyData(pf)
+        if convertToMM:
+            pc.points[np.where(pc.points[:, 2]!=-1), :] = pc.points[np.where(pc.points[:, 2]!=-1), :] * 1000
+        if discardedVerts is not None:
+            pc.points[discardedVerts, :] = [0, 0, -1]
         allPts.append(pc.points.tolist())
 
     if interval is not None:
@@ -349,6 +361,15 @@ def QuaternionToAngleAxis(quaternion):
     angle_axis[1] = q2 * k
     angle_axis[2] = q3 * k
   return angle_axis
+
+def loadPoseFile(poseFile, allowJointTranslation=False):
+    poseData = json.load(open(poseFile))
+    quaternions = poseData["JointAngles"]
+    translation = poseData["Translation"]
+    if not allowJointTranslation:
+        translation = translation[0]
+
+    return quaternions,translation
 
 def loadPoseChunkFile(poseChunkFile):
     poseData = json.load(open(poseChunkFile))

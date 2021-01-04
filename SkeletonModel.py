@@ -5,6 +5,9 @@ from pathlib import Path
 import json
 from . import Data
 
+def padOnes(mat):
+    return np.vstack([mat, np.ones((1, mat.shape[1]))])
+
 def readSkeletonData(skelDataFile):
     skelData = json.load(open(skelDataFile))
     vRestpose = (np.array(skelData['VTemplate']).transpose())[:, :3]
@@ -30,6 +33,11 @@ def readSkeletonData(skelDataFile):
 
 def quaternionsToRotations(qs):
     Rs = [R.from_quat([q[1], q[2], q[3], q[0]]) for q in qs]
+    Rs = [r.as_dcm() for r in Rs]
+
+    return np.array(Rs)
+def axisAnglesToRotation(rs):
+    Rs = [R.from_rotvec([r[0], r[1], r[2], ]) for r in rs]
     Rs = [r.as_dcm() for r in Rs]
 
     return np.array(Rs)

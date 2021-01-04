@@ -28,6 +28,35 @@ def toPolyData(verts, faces):
     mesh = pv.PolyData(verts, faces)
     return mesh
 
+def retrieveFaceStructure(meshPV):
+    faces = []
+    fId = 0
+    while fId < meshPV.faces.shape[0]:
+        numFVs = meshPV.faces[fId]
+        face = []
+        fId += 1
+        for i in range(numFVs):
+            face.append(int(meshPV.faces[fId]))
+            fId += 1
+
+        faces.append(face)
+    return faces
+
+def flattenFaces(faces):
+    facesFlatten = []
+    for f in faces:
+        facesFlatten.extend([len(f), *f])
+        
+    return np.array(facesFlatten, dtype=np.int64)
+
+def getIsolatedVerts(mesh):
+    faces = retrieveFaceStructure(mesh)
+    vertsMask = np.ones(mesh.points.shape[0])
+    for f in faces:
+        for vId in f:
+            vertsMask[vId] = 0
+
+    return np.where(vertsMask)[0]
 
 def readBatchedSkelParams(inBatchFile, numRotations=16):
     files = json.load(open(inBatchFile))['BatchFiles']
@@ -118,7 +147,7 @@ def pointCloudFilesToJsonBatch(inFrameDataFolder, jsonFrameDataFolder, extName='
     return outFile
 
 
-def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, inputExt = 'obj'):
+def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, inputExt = 'obj', padTo=None):
     inFiles = glob.glob(join(inFolder, '*.'+inputExt))
     if interval is not None:
         inFiles = inFiles[interval[0]:interval[1]]
@@ -126,13 +155,21 @@ def pointCloudFilesToChunk(inFolder, chunkFile, interval = None, indent=2, input
     allPts = []
     for pf in tqdm.tqdm(inFiles):
         pc = pv.PolyData(pf)
-        allPts.append(pc.points.tolist())
+        if padTo is None:
+            allPts.append(pc.points.tolist())
+        else:
+            pts = pc.points.tolist()
+            for i in range(padTo-len(pts)):
+                pts.append([0,0,-1])
+            allPts.append(pts)
 
     if interval is not None:
         filename, file_extension = os.path.splitext(chunkFile)
         chunkFile = filename + '_' + str(interval[0]) + '_' + str(interval[1]) + file_extension
 
     json.dump({"BatchFiles": inFiles, "Pts": allPts}, open(chunkFile, 'w'), indent=indent)
+
+    return chunkFile
 
 def scanFilesToChunkFromBatchFile(batchFile, chunkFile, interval =[], indent=2):
     files = json.load(open(batchFile))["BatchFiles"]

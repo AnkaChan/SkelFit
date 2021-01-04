@@ -9,6 +9,7 @@ import vtk
 import tqdm
 import json
 from .SkeletonModel import  *
+from .Data import  *
 
 def jsonToVtk(batchFile, outVTKFolder, addFaces = False, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
     jsonFiles = json.load(open(batchFile))["BatchFiles"]
@@ -68,7 +69,8 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
         fp = Path(objF)
 
         mesh = pv.read(objF)
-        mesh.faces = meshWithFaces.faces
+        if meshWithFaces is not None:
+            mesh.faces = meshWithFaces.faces
 
         if visualizeFittingError:
             errs = np.loadtxt(errFolder + '\\' + fp.stem + '.txt')
@@ -139,7 +141,7 @@ def drawCorrs(pts1, pts2, outCorrFile):
     ptsAll = np.vstack([pts1, pts2])
     numPts = pts1.shape[0]
 
-    assert pts1.shape[0] == pts2.shape[0]
+    # assert pts1.shape[0] == pts2.shape[0]
 
     # pts.InsertNextPoint(p1)
     for i in range(ptsAll.shape[0]):
@@ -256,13 +258,20 @@ def VisualizeBones(inSkelJsonFile, outSkelVTK):
 def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, observeHistograms = None, removeUnobserved = False,
         visualizeFittingError = False, fittingErrorFolder = '', visualizeBoneActivation = False, chunked = False, addLogScaleWeights = False,
         meshWithFaces = r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
-    meshWithFaces = pv.read(meshWithFaces)
 
     jData = json.load(open(inSkelJsonFile))
     jointPosition = np.array(jData["VTemplate"])
 
-    mesh = pv.PolyData()
-    mesh.points = np.transpose(jointPosition[0:3, :])
+    if meshWithFaces is not None:
+        meshWithFaces = pv.read(meshWithFaces)
+    else:
+        faces = jData['Faces']
+        facesFlatten = flattenFaces(faces)
+        meshWithFaces = pv.PolyData(np.array(jointPosition), facesFlatten)
+
+
+    mesh = pv.PolyData( np.transpose(jointPosition[0:3, :]))
+    # mesh.points =
 
     if visualizeWeights:
         weights = np.array(jData["Weights"])
@@ -280,14 +289,20 @@ def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, o
         if removeUnobserved:
             unobserved = np.where(observeHistograms == 0)[0]
             faceIdToPreserve = []
-            faces = meshWithFaces.faces.reshape(-1, 4)
-            for i in range(faces.shape[0]):
-                if not (int(faces[i][1]) in unobserved or int(faces[i][2]) in unobserved or int(faces[i][3]) in unobserved):
-                    faceIdToPreserve.append(i)
-            faces = faces[faceIdToPreserve, :]
-            nFaces = faces.shape[0]
+            if meshWithFaces is not None:
+                faces = meshWithFaces.faces.reshape(-1, 4)
+                for i in range(faces.shape[0]):
+                    if not (int(faces[i][1]) in unobserved or int(faces[i][2]) in unobserved or int(
+                            faces[i][3]) in unobserved):
+                        faceIdToPreserve.append(i)
+                faces = faces[faceIdToPreserve, :]
+                meshWithFaces.faces = faces.flatten()
+                mesh.faces = meshWithFaces.faces
+
+
+
+            # nFaces = faces.shape[0]
             # meshWithFaces.n_faces = nFaces
-            meshWithFaces.faces = faces.flatten()
 
     if visualizeFittingError and fittingErrorFolder != '':
         if chunked:
@@ -311,7 +326,6 @@ def VisualizeVertRestPose(inSkelJsonFile, outSkelVTK, visualizeWeights = True, o
             activeBoneMarks[table, i] = 1
         for iBone in range(numBones):
             mesh.point_arrays['Activation_%02i' % iBone] = activeBoneMarks[iBone, :]
-
 
     mesh.faces = meshWithFaces.faces
     # mesh.n_faces = meshWithFaces.n_faces

@@ -29,9 +29,13 @@ def removeOutliers(inChunkFile, newChunkFile, outlierIds):
 
 def toPolyData(verts, faces):
     nFaces = np.array([len(vs) for vs in faces])
-    faces = np.hstack([nFaces.reshape(nFaces.shape[0],1), faces])
+    # faces = np.hstack([nFaces.reshape(nFaces.shape[0],1), faces])
 
-    mesh = pv.PolyData(verts, faces)
+    facesForPv = []
+    for iF in range(len(faces)):
+        facesForPv.append([nFaces[iF], *faces[iF]])
+    facesForPv = np.hstack(facesForPv)
+    mesh = pv.PolyData(verts, facesForPv)
     return mesh
 
 

@@ -362,7 +362,7 @@ def visualizeSkeleton(paramChunkFile, skelDataFile, outFolder):
 
         v, G = deformVertsWithJointTranslation(vRestpose, RMats, translations, J, weights, kintreeTable, parent, returnTransf=True)
 
-        print(G)
+        # print(G)
 
         mesh = Data.toPolyData(v, faces)
         outDeformedFile = join(outFolder, 'A' + str(ip).zfill(5) + '.ply')

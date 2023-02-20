@@ -30,7 +30,7 @@ def readSkeletonData(skelDataFile):
 
 def quaternionsToRotations(qs):
     Rs = [R.from_quat([q[1], q[2], q[3], q[0]]) for q in qs]
-    Rs = [r.as_dcm() for r in Rs]
+    Rs = [r.as_matrix() for r in Rs]
 
     return np.array(Rs)
 

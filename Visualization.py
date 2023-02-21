@@ -38,11 +38,11 @@ def jsonToVtk(batchFile, outVTKFolder, addFaces = False, meshWithFaces=r'C:\Code
         mesh.save(outVTKFolder + r'\\' + fp.stem + '.vtk')
 
 
-def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False, visualizeFittingError = False, outVTKFolder = None, extName= 'obj', addABeforeName = False, outExtName='vtk',
-                 meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply', addGround =False, groundLevel=0):
+def fittingToVtk(inFitFolder, removeUnobservedFaces = True, observeHistograms = None, removeUnobserved = False, visualizeFittingError = False, outVTKFolder = None, extName= 'obj', addABeforeName = False, outExtName='vtk',
+                 meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply', addGround =False, groundLevel=0, numRealPts = 1487):
 
     if outVTKFolder is None:
-        outVTKFolder= inFitFolder + r'\vtk'
+        outVTKFolder= inFitFolder + r'\vis'
     os.makedirs(outVTKFolder, exist_ok=True)
     if meshWithFaces is not None:
         meshWithFaces = pv.read(meshWithFaces)
@@ -61,6 +61,7 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
             nFaces = faces.shape[0]
             # meshWithFaces.n_faces = nFaces
             meshWithFaces.faces = faces.flatten()
+            
 
 
     objFiles = glob.glob(inFitFolder + r'\*.' + extName)
@@ -69,7 +70,28 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
         fp = Path(objF)
 
         mesh = pv.read(objF)
-        if meshWithFaces is not None:
+
+        if removeUnobservedFaces:
+            faceIdToPreserve = []
+            faces = retrieveFaceStructure(meshWithFaces)
+            pts = mesh.points
+            for i in range(len(faces)):
+                vertsObserved = []
+                for iV in faces[i]:
+                    if iV < pts.shape[0]:
+                        vertsObserved.append(pts[iV][2] != -1)
+                    else:
+                        vertsObserved.append(False)
+
+                if np.all(vertsObserved):
+                    faceIdToPreserve.append(i)
+            facesToPreserve = [faces[iF] for iF in faceIdToPreserve]
+            flattenFaces = []
+            for face in facesToPreserve:
+                flattenFaces.extend([len(face), *face])
+            mesh.faces = np.array(flattenFaces)
+
+        elif meshWithFaces is not None:
             mesh.faces = meshWithFaces.faces
 
         if visualizeFittingError:
@@ -91,7 +113,7 @@ def fittingToVtk(inFitFolder, observeHistograms = None, removeUnobserved = False
         else:
             mesh.save(outVTKFolder + r'\\' + fp.stem + '.' + outExtName)
 
-def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterval=[], addFaces = False, addABeforeName=True, faceMesh=None):
+def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterval=[], addFaces = False, addABeforeName=True, faceMesh=None,):
 
 
     # addFaces = True
@@ -103,7 +125,7 @@ def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterv
     if faceMesh is not None:
         meshWithFaces = pv.read(faceMeshFile)
     else:
-        meshWithFaces = pv.PolyData()
+        meshWithFaces = None
         
     os.makedirs(outVtkFolder, exist_ok=True)
     if len(processInterval) == 2:
@@ -112,14 +134,14 @@ def obj2vtkFolder(inObjFolder, inFileExt='obj', outVtkFolder=None, processInterv
         fp = Path(f)
 
         mesh = pv.read(f)
-        if addFaces:
+        if addFaces and meshWithFaces is not  None:
             mesh.faces = meshWithFaces.faces
         # else:
         #     mesh.faces = np.empty((0,), dtype=np.int32)
         if addABeforeName:
-            outName = outVtkFolder + r'\\A' + fp.stem + '.vtk'
+            outName = outVtkFolder + r'\\A' + fp.stem + '.ply'
         else:
-            outName = outVtkFolder + r'\\' + fp.stem + '.vtk'
+            outName = outVtkFolder + r'\\' + fp.stem + '.ply'
         mesh.save(outName)
 
 def obj2vtk(objF, vtkF, meshWithFaces=r'C:\Code\MyRepo\ChbCapture\06_Deformation\CeresSkelFit\AlternateOptimization\cornersRegisteredToSMpl.ply'):
